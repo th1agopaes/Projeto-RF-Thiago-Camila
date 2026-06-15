@@ -106,6 +106,12 @@ void setup()
 
         q.fcs = calcularCRC(q);
 
+        /*if (q.seq == 2)
+        {
+            q.data[0] ^= 0xFF;
+        }
+        */
+
         Serial.print("Enviando SEQ ");
         Serial.print(seq);
         Serial.print(" -> ");

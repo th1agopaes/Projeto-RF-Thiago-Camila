@@ -266,19 +266,19 @@ Durante a demonstração são apresentados:
 
 | Sinal | GPIO |
 |---------|---------|
-| RF TX DATA | GPIO 26 |
-| RF RX DATA | GPIO 27 |
+| RF TX DATA | GPIO 13 |
+| RF RX DATA | x |
 
 ## ESP32 Receptor
 
 | Sinal | GPIO |
 |---------|---------|
-| RF TX DATA | GPIO 26 |
-| RF RX DATA | GPIO 27 |
+| RF TX DATA | GPIO 14 |
+| RF RX DATA | y |
 
 ## LCD I2C
 
 | Sinal | GPIO |
 |---------|---------|
-| SDA | GPIO 21 |
-| SCL | GPIO 22 |
+| SDA | GPIO 25 |
+| SCL | GPIO 26 |

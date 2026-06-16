@@ -25,7 +25,7 @@ Este projeto implementa um sistema de comunicação sem fio entre duas placas ES
 * Transmitir mensagens de texto e exibir no display LCD
 * Transmitir e reconstruir pequenas imagens
 
-> **Nota sobre o algoritmo de controle de fluxo:** A implementação do protocolo Go-Back-N ARQ requer comunicação bidirecional via RF, o que exige um módulo TX e um módulo RX em cada ESP32 (dois pares no total). Durante o desenvolvimento, identificamos que o kit disponibilizava apenas um par de módulos (1 TX + 1 RX), impossibilitando o envio de ACK via RF. Essa limitação foi confirmada pelo professor. O algoritmo Go-Back-N está documentado e implementado nos códigos, mas não pôde ser testado por restrição de hardware.
+> **Nota sobre o algoritmo de controle de fluxo:** A implementação do protocolo Go-Back-N ARQ requer comunicação bidirecional via RF, o que exige um módulo TX e um módulo RX em cada ESP32 (dois pares no total). Durante o desenvolvimento, interpretamos que seria necessário apenas 2 módulos RF (1 TX + 1 RX), impossibilitando o envio de ACK via RF. O algoritmo Go-Back-N está documentado e implementado nos códigos, mas não pôde ser testado por restrição de hardware.
 
 ---
 

@@ -1,4 +1,4 @@
-# Projeto Final - Comunicação via Rádio RF 433 MHz
+# Projeto Final: Comunicação via Rádio RF 433 MHz
 
 ## Autores
 

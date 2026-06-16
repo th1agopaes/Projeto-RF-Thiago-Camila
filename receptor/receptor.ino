@@ -269,11 +269,9 @@ void loop() {
 
     /*
       Aqui o receptor deveria enviar um ACK para o transmissor
-      confirmando o recebimento do quadro. Com 2 pares de módulos
-      RF isso funcionaria normalmente. Com 1 par, o envio do ACK
-      via RF não é possível.
-
-      Código do ACK (funcional quando tiver hardware completo):
+      confirmando o recebimento do quadro. Com 1 par, o envio do ACK
+      via RF não é possível
+      
       uint8_t ack[5] = {0x7E, TYPE_ACK, q.seq, 0, 0};
       driver.send(ack, 5);
       driver.waitPacketSent();

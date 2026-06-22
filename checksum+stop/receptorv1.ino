@@ -33,21 +33,21 @@
 #include <LiquidCrystal_I2C.h>
 
 //  PINOS
-#define PINO_RX_DADOS 13
-#define PINO_TX_ACK 27
-#define PINO_SDA_LCD 32
-#define PINO_SCL_LCD 33
+#define PINO_RX_DADOS    13
+#define PINO_TX_ACK      27
+#define PINO_SDA_LCD     32
+#define PINO_SCL_LCD     33
 
-// Macros
-#define FLAG_INICIO 0x7E
-#define TIPO_DATA 0x01
-#define TIPO_ACK 0x02
-#define TIPO_END 0x03
-#define SEQ_CABECALHO 0xFF
+//  MACROS
+#define FLAG_INICIO      0x7E
+#define TIPO_DATA        0x01
+#define TIPO_ACK         0x02
+#define TIPO_END         0x03
+#define SEQ_CABECALHO    0xFF
 #define TOTAL_LINHAS_IMG 8
-#define DELAY_ANTES_ACK 500 // 0,5s
+#define DELAY_ANTES_ACK  500   // 0,5s, dá tempo ao TX de terminar envio e escutar
 
-// Esrtutura do frame
+//  ESTRUTURA DO FRAME
 struct Quadro {
   uint8_t flag;
   uint8_t tipo;
@@ -57,9 +57,11 @@ struct Quadro {
   uint8_t fcs;
 };
 
-/*
- Checksum
-*/
+// ============================================================
+//  Classe: Checksum
+//  Idêntica à do transmissor para os valores do FCS baterem
+//  FCS = soma dos campos (tipo + seq + len + dados) módulo 256
+// ============================================================
 class Checksum {
   public:
     static uint8_t calcular(const Quadro& q) {
@@ -68,15 +70,16 @@ class Checksum {
       soma += q.tipo;
       soma += q.seq;
       soma += q.len;
-
       for (int i = 0; i < q.len; i++) soma += q.dados[i];
 
       return (uint8_t)(soma & 0xFF);
     }
 };
 
-// Display:
-//  LCD 16x2 I2C endereço 0x27
+// ============================================================
+//  Classe: Display
+//  LCD 16x2 I2C com endereço 0x27
+// ============================================================
 class Display {
   private:
     LiquidCrystal_I2C lcd;
@@ -90,12 +93,12 @@ class Display {
       lcd.backlight();
       limpar();
       escrever(0, "Aguardando TX...");
-      escrever(1, "RF 433MHz pronto");
+      escrever(1, "RF 433MHz OK");
     }
 
     void limpar() { lcd.clear(); }
 
-    // Escreve em uma linha (0 ou 1) no máximo 16 caracteres
+    // Escreve em uma linha (0 ou 1), máximo de 16 caracteres
     void escrever(uint8_t linha, const String& texto) {
       lcd.setCursor(0, linha);
       lcd.print("                ");
@@ -104,7 +107,7 @@ class Display {
     }
 
     void mostrarTexto(uint8_t seq, const String& texto) {
-      escrever(0, "SEQ:" + String(seq));
+      escrever(0, "TXT SEQ:" + String(seq));
       escrever(1, texto);
     }
 
@@ -130,13 +133,15 @@ class Display {
 
     void mostrarPronto() {
       escrever(0, "Aguardando TX...");
-      escrever(1, "RF 433MHz pronto");
+      escrever(1, "RF 433MHz OK");
     }
 };
 
-//  CanalRF:
-//    Recebe frame DATA via GPIO13
-//    Envia frame ACK via GPIO27
+// ============================================================
+//  Classe: CanalRF
+//  Recebe quadros DATA via GPIO13
+//  Envia quadros ACK  via GPIO27
+// ============================================================
 class CanalRF {
   private:
     RH_ASK driver;
@@ -165,7 +170,7 @@ class CanalRF {
       return true;
     }
 
-    // Aguarda 0,5s e envia o ACK com o seq informado
+    // Aguarda 0,5s e envia ACK com o seq informado
     void enviarACK(uint8_t seq) {
       delay(DELAY_ANTES_ACK);
       uint8_t buffer[4] = { FLAG_INICIO, TIPO_ACK, seq, 0x00 };
@@ -174,18 +179,20 @@ class CanalRF {
     }
 };
 
-// Receptor:
-//   3 modos
-//    ESPERA: aguarda cabeçalho DATA[0xFF] com "TEXTO"/"IMAGEM"
-//    TEXTO: recebe frame DATA e exibe no LCD
-//    IMAGEM: recebe frame DATA e armazena no bufferImagem
-
-//  Tratamento de ACK:
-//    DATA novo e válido: processa + envia ACK(seq)
-//    Retransmissão do TX: reenvia ACK(seq-1) sem reprocessar
-//    FCS inválido: descarta e não envia ACK
-//    Cabeçalho repetido: reenvia ACK(0xFF) sem reconfigurar
-//    END no modo ESPERA: ignora (duplicata do 3x)
+// ============================================================
+//  Classe: Receptor
+//    3 modos:
+//    ESPERA: aguarda cabeçalho DATA[0xFF] com "TEXTO" ou "IMAGEM"
+//    TEXTO: recebe frames DATA e exibe no LCD
+//    IMAGEM: recebe frames DATA e armazena no bufferImagem
+//
+//  Tratamento do ACK:
+//     DATA novo e válido: processa e envia ACK(seq)
+//     Retransmissão do TX: reenvia ACK(seq-1) sem reprocessar
+//     FCS inválido: descarta e não envia ACK
+//     Cabeçalho repetido: reenvia ACK(0xFF) sem reconfigurar
+//     END no modo ESPERA: ignora (duplicata do triple-send)
+// ============================================================
 class Receptor {
   private:
 
@@ -205,36 +212,37 @@ class Receptor {
         modo(ESPERA), seqEsperada(0), linhasRecebidas(0)
     {}
 
-    // Chamado continuamente no loop() — sem delay() aqui!
+    // Chamado continuamente no loop()
     void processar() {
       Quadro q;
       if (!canal.receberQuadro(q)) return;
 
       // Valida FLAG
       if (q.flag != FLAG_INICIO) {
-        Serial.println("[DESCARTE] FLAG invalida: 0x" + String(q.flag, HEX));
+        Serial.println("[DESCARTE] FLAG inválida: 0x" + String(q.flag, HEX));
         return;
       }
 
       // Valida FCS
       uint8_t fcsCalculado = Checksum::calcular(q);
       if (fcsCalculado != q.fcs) {
-        Serial.println("=================================");
+        Serial.println("================================");
         Serial.print("[ERRO-FCS] SEQ:" + String(q.seq));
-        Serial.print(" | Calc:0x"); Serial.print(fcsCalculado, HEX);
-        Serial.print(" | Rcb:0x");  Serial.println(q.fcs, HEX);
-        Serial.println("[DESCARTE] Sem ACK, o TX vai retransmitir");
+        Serial.print(" | Calculado:0x"); Serial.print(fcsCalculado, HEX);
+        Serial.print(" | Recebido:0x");  Serial.println(q.fcs, HEX);
+        Serial.println("[DESCARTE] Sem ACK, TX vai retransmitir");
         display.mostrarErroFCS(q.seq);
         return;
       }
 
-      //Roteia por tipo
-      if (q.tipo == TIPO_DATA) tratarDATA(q);
-      else if (q.tipo == TIPO_END) tratarEND();
+      // Roteia por tipo
+      if      (q.tipo == TIPO_DATA) tratarDATA(q);
+      else if (q.tipo == TIPO_END)  tratarEND();
     }
 
   private:
-    // Trata quadro DATA
+
+    //  Trata frame do tipo DATA
     void tratarDATA(const Quadro& q) {
 
       // Cabeçalho de sessão SEQ=0xFF
@@ -247,18 +255,18 @@ class Receptor {
                              (modo == IMAGEM && String(tipo) == "IMAGEM");
 
         if (!modoJaCorreto) {
-          // Primeira recepção — configura modo e reseta estado
-          Serial.println("=================================");
-          Serial.println("[CAB] Sessao: \"" + String(tipo) + "\"");
+          // Primeira recepção configura modo e reseta estado
+          Serial.println("================================");
+          Serial.println("[CAB] Sessão: \"" + String(tipo) + "\"");
 
           if (String(tipo) == "TEXTO") {
-            modo = TEXTO;
+            modo        = TEXTO;
             seqEsperada = 0;
             Serial.println("[CAB] Modo: TEXTO");
 
           } else if (String(tipo) == "IMAGEM") {
-            modo = IMAGEM;
-            seqEsperada = 0;
+            modo            = IMAGEM;
+            seqEsperada     = 0;
             linhasRecebidas = 0;
             memset(bufferImagem, 0, sizeof(bufferImagem));
             Serial.println("[CAB] Modo: IMAGEM");
@@ -266,15 +274,15 @@ class Receptor {
         }
         // Sempre responde ACK, seja primeira vez ou retransmissão
         canal.enviarACK(SEQ_CABECALHO);
-        Serial.println("[ACK] Cabecalho confirmado");
+        Serial.println("[ACK] Cabeçalho confirmado");
         return;
       }
 
-      // Quadro DATA normal
+      // Frame DATA normal
 
       // Rejeita se não recebeu cabeçalho ainda
       if (modo == ESPERA) {
-        Serial.println("[DESCARTE] Dado sem cabecalho de sessao");
+        Serial.println("[DESCARTE] Dado sem cabeçalho de sessão");
         return;
       }
 
@@ -287,12 +295,12 @@ class Receptor {
 
       // Descarta se fora de ordem
       if (q.seq != seqEsperada) {
-        Serial.print("[FORA-ORDEM] Esp:" + String(seqEsperada));
-        Serial.println(" | Rcb:" + String(q.seq) + "  descartando");
+        Serial.print("[FORA DE ORDEM] Esperado:" + String(seqEsperada));
+        Serial.println(" | Recebido:" + String(q.seq) + " , descartando...");
         return;
       }
 
-      // Quadro novo e válido
+      // Frame novo e válido
 
       // Extrai texto
       char texto[17] = {};
@@ -300,7 +308,7 @@ class Receptor {
       texto[q.len] = '\0';
 
       // Log
-      Serial.println("=================================");
+      Serial.println("================================");
       Serial.print("[RX-OK] SEQ:" + String(q.seq));
       Serial.print(" | FCS:0x"); Serial.print(q.fcs, HEX);
       Serial.println(" | \"" + String(texto) + "\"");
@@ -311,7 +319,7 @@ class Receptor {
 
       seqEsperada++;
 
-      // Processa conforme modo atual
+      // Processa conforme o modo atual
       if (modo == TEXTO) {
         display.mostrarTexto(q.seq, String(texto));
 
@@ -324,15 +332,15 @@ class Receptor {
       }
     }
 
-    //  Trata quadro END
+    //  Trata frame do tipo END
     void tratarEND() {
       // Ignora se está em ESPERA
       if (modo == ESPERA) {
-        Serial.println("[END] Ignorado: modo ESPERA.");
+        Serial.println("[END] Ignorado, modo ESPERA");
         return;
       }
 
-      Serial.println("=================================");
+      Serial.println("================================");
 
       if (modo == TEXTO) {
         Serial.println("[END-TEXTO] Transmissao de texto concluida");
@@ -350,46 +358,50 @@ class Receptor {
     //  Imprime a imagem reconstruída no Serial
     void imprimirImagem() {
       Serial.println();
-      Serial.println("=================================");
-      Serial.println("   IMAGEM RECONSTRUIDA    ");
-      Serial.println("=================================");
-      Serial.println("|  Col:  01234567          |");
+      Serial.println("================================");
+      Serial.println("║   IMAGEM RECONSTRUIDA    ║");
+      Serial.println("================================");
+      Serial.println("║  Col:  01234567          ║");
       for (int i = 0; i < TOTAL_LINHAS_IMG; i++) {
         String lin = "║  L" + String(i) + ":   ";
         lin += String(bufferImagem[i]);
         lin += "  ║";
         Serial.println(lin);
       }
-      Serial.println("=================================");
+      Serial.println("================================");
     }
 
     //  Reseta estado para aguardar próxima sessão
     void resetarEstado() {
-      modo = ESPERA;
-      seqEsperada = 0;
+      modo            = ESPERA;
+      seqEsperada     = 0;
       linhasRecebidas = 0;
       memset(bufferImagem, 0, sizeof(bufferImagem));
 
       delay(3000);
       display.mostrarPronto();
-      Serial.println("[INFO] Aguardando proxima transmissao...\n");
+      Serial.println("[INFO] Aguardando próxima transmissão...\n");
     }
 };
 
-//  Instâncias globais
+// ============================================================
+//  OBJETOS GLOBAIS
+// ============================================================
 CanalRF  canal;
 Display  display;
 Receptor receptor(canal, display);
 
-//  setup
+// ============================================================
+//  SETUP
+// ============================================================
 void setup() {
   Serial.begin(115200);
   delay(1000);
   Serial.println("========================================");
   Serial.println("  RECEPTOR: Stop-and-Wait ARQ");
   Serial.println("  FCS: Checksum (soma dos bytes mod 256)");
-  Serial.println("  GPIO13=RX_DADOS e GPIO27=TX_ACK");
-  Serial.println("  GPIO32=SDA_LCD  e GPIO33=SCL_LCD");
+  Serial.println("  GPIO13 = RX_DADOS e GPIO27 = TX_ACK");
+  Serial.println("  GPIO32 = SDA_LCD  e GPIO33 = SCL_LCD");
   Serial.println("========================================");
 
   display.iniciar();
@@ -402,11 +414,12 @@ void setup() {
   }
 
   Serial.println("[OK] Driver RF inicializado");
-  Serial.println("[INFO] Aguardando quadros do transmissor...\n");
+  Serial.println("[INFO] Aguardando frames do transmissor...\n");
 }
 
-// loop
+// ============================================================
+//  LOOP
+// ============================================================
 void loop() {
   receptor.processar();
 }
-

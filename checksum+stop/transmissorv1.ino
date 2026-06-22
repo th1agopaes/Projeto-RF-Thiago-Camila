@@ -1,4 +1,3 @@
-
 /* ============================================================
   Placa: ESP32 Protoboard A (Transmissor)
   Versão: Checksum + Stop-and-Wait ARQ
@@ -34,19 +33,19 @@
 #include <RH_ASK.h>
 #include <SPI.h>
 
-// Pinos
-#define PINO_TX_DADOS 13
-#define PINO_RX_ACK  27
+//  PINOS
+#define PINO_TX_DADOS    13
+#define PINO_RX_ACK      27
 
-// Macros
-#define FLAG_INICIO 0x7E
-#define TIPO_DATA 0x01
-#define TIPO_ACK 0x02
-#define TIPO_END 0x03
-#define SEQ_CABECALHO 0xFF   // SEQ especial: quadro de anúncio de sessão
-#define TIMEOUT_MS 2000
+//  MACROS
+#define FLAG_INICIO      0x7E
+#define TIPO_DATA        0x01
+#define TIPO_ACK         0x02
+#define TIPO_END         0x03
+#define SEQ_CABECALHO    0xFF   // SEQ especial: quadro de anúncio de sessão
+#define TIMEOUT_MS       2000   // Espera 2s pelo ACK antes de retransmitir
 
-// Estrutura do frame
+//  ESTRUTURA DO FRAME
 struct Quadro {
   uint8_t flag;
   uint8_t tipo;
@@ -56,27 +55,28 @@ struct Quadro {
   uint8_t fcs;
 };
 
-/*
- Checksum:
-  Calcula o FCS somando tipo + seq + len + dados (mod 256)
-*/
+// ============================================================
+//  Classe: Checksum
+//  Calcula o FCS somando os campos tipo + seq + len + dados (mod 256)
+// ============================================================
 class Checksum {
   public:
-    static uint8_t calcularFCS(const Quadro& q) {
+    static uint8_t calcular(const Quadro& q) {
       uint16_t soma = 0;
 
       soma += q.tipo;
       soma += q.seq;
       soma += q.len;
-
       for (int i = 0; i < q.len; i++) soma += q.dados[i];
 
       return (uint8_t)(soma & 0xFF);
     }
 };
 
-// CanalRF:
+// ============================================================
+//  Classe: CanalRF
 //  TX Dados via GPIO13 e RX ACK via GPIO27
+// ============================================================
 class CanalRF {
   private:
     RH_ASK driver;
@@ -91,27 +91,30 @@ class CanalRF {
     void enviarQuadro(const Quadro& q) {
       uint8_t tamanho = 4 + q.len + 1;
       uint8_t buffer[21];
+
       buffer[0] = q.flag;
       buffer[1] = q.tipo;
       buffer[2] = q.seq;
       buffer[3] = q.len;
       for (int i = 0; i < q.len; i++) buffer[4 + i] = q.dados[i];
       buffer[4 + q.len] = q.fcs;
+
       driver.send(buffer, tamanho);
       driver.waitPacketSent();
     }
 
     // Escuta o módulo RX ACK por até 2s
-    // Retorna true se chegou um ACK válido com o campo seq correto
+    // Retorna true se chegou ACK válido com o campo seq correto
     bool aguardarACK(uint8_t seqEsperado) {
       unsigned long inicio = millis();
       while (millis() - inicio < TIMEOUT_MS) {
         uint8_t buffer[10];
         uint8_t tamanho = sizeof(buffer);
+
         if (driver.recv(buffer, &tamanho)) {
-          if (tamanho >= 3 &&
+          if (tamanho >= 3             &&
               buffer[0] == FLAG_INICIO &&
-              buffer[1] == TIPO_ACK &&
+              buffer[1] == TIPO_ACK    &&
               buffer[2] == seqEsperado) {
             return true;
           }
@@ -121,22 +124,25 @@ class CanalRF {
     }
 };
 
-
-/* Implementação do protocolo Stop-and-Wait ARQ:
-    Envia 1 frame;
-    Aguarda o ACK por 2s;
-    Se não receber o ACK, retransmite o mesmo frame;
-    Só avança para o próximo frame após o ACK ser confirmado
-*/
+// ============================================================
+//  Classe: StopAndWait
+//
+//  Implementação do protocolo Stop-and-Wait ARQ:
+//   Envia 1 frame
+//   Aguarda ACK por 2s
+//   Se não receber, retransmite o MESMO frame
+//   Só avança para o próximo frame após ACK confirmado
+// ============================================================
 class StopAndWait {
   private:
     CanalRF& canal;
-    uint8_t sequencia;
+    uint8_t  sequencia;
 
   public:
     StopAndWait(CanalRF& c) : canal(c), sequencia(0) {}
 
-    // Fica em loop retransmitindo até o receptor enviar o ACK
+    // Envia cabeçalho de sessão anunciando o tipo de conteúdo
+    // Fica em loop retransmitindo até o receptor confirmar via ACK
     void enviarCabecalho(const char* tipo) {
       Quadro q;
       q.flag = FLAG_INICIO;
@@ -144,26 +150,53 @@ class StopAndWait {
       q.seq  = SEQ_CABECALHO;
       q.len  = strlen(tipo);
       memcpy(q.dados, tipo, q.len);
-      q.fcs = Checksum::calcular(q);
+      q.fcs  = Checksum::calcular(q);
 
       int tentativa = 0;
-      Serial.println("[CAB] Anunciando tipo: \"" + String(tipo) + "\"");
+      Serial.println("[CAB] Tipo do conteúdo: \"" + String(tipo) + "\"");
       while (true) {
         tentativa++;
         canal.enviarQuadro(q);
         delay(50);
         if (canal.aguardarACK(SEQ_CABECALHO)) {
-          Serial.println("[CAB] Confirmado pelo receptor. (Tent:" + String(tentativa) + ")");
+          Serial.println("[CAB] Confirmado pelo receptor. (Tentativa:" + String(tentativa) + ")");
           return;
         }
-        Serial.println("[CAB] Aguardando confirmacao... (Tent:" + String(tentativa) + ")");
+        Serial.println("[CAB] Aguardando confirmação... (Tentativa:" + String(tentativa) + ")");
       }
     }
 
-    // Envia um quadro frame e aguarda o ACK
-    // simularErro=true, corrompe 1 byte para demonstração de detecção de erros
+    // Envia um frame do tipo DATA e aguarda ACK em loop infinito
+    // simularErro=true: envia 1 vez corrompido
+    // depois envia corretamente até receber ACK
     // Só retorna quando o ACK for recebido
     void enviar(const char* texto, bool simularErro = false) {
+      // Fase de simulação de erro (apenas 1 envio corrompido)
+      if (simularErro) {
+        Quadro qErro;
+        qErro.flag = FLAG_INICIO;
+        qErro.tipo = TIPO_DATA;
+        qErro.seq  = sequencia;
+        qErro.len  = strlen(texto);
+        memcpy(qErro.dados, texto, qErro.len);
+        qErro.fcs  = Checksum::calcular(qErro);
+        qErro.dados[0] ^= 0xFF;  // Corrompe 1 byte
+
+        Serial.println(">>> [ERRO-SIMULAÇÃO] Enviando SEQUÊNCIA:" + String(sequencia) + " CORROMPIDO propositalmente");
+        Serial.println("================================");
+        Serial.print("[TX] SEQUÊNCIA:" + String(qErro.seq));
+        Serial.print(" | \"" + String(texto) + "\"");
+        Serial.print(" | FCS:0x"); Serial.print(qErro.fcs, HEX);
+        Serial.println(" [CORROMPIDO] | Tentativa:1");
+
+        canal.enviarQuadro(qErro);
+        delay(50);
+        canal.aguardarACK(sequencia);  // Espera pelo timeout (receptor vai descartar)
+        Serial.println("[TIMEOUT] Receptor descartou. FCS invalido detectado");
+        Serial.println(">>> [ERRO-SIMULAÇÂO] Enviando dado CORRETO...");
+      }
+
+      // Envio normal, fica em loop até receber ACK 
       Quadro q;
       q.flag = FLAG_INICIO;
       q.tipo = TIPO_DATA;
@@ -172,20 +205,13 @@ class StopAndWait {
       memcpy(q.dados, texto, q.len);
       q.fcs  = Checksum::calcular(q);
 
-      if (simularErro) {
-        q.dados[0] ^= 0xFF;
-        Serial.println(">>> [ERRO-SIM] Corrompendo SEQ:" + String(sequencia) + " propositalmente!");
-      }
-
-      int tentativa = 0;
+      int tentativa = simularErro ? 2 : 1;  // Já usou tentativa:1 no erro
       while (true) {
-        tentativa++;
-        Serial.println("------------------------------------");
-        Serial.print("[TX] SEQ:" + String(q.seq));
+        Serial.println("=================================");
+        Serial.print("[TX] SEQUÊNCIA:" + String(q.seq));
         Serial.print(" | \"" + String(texto) + "\"");
         Serial.print(" | FCS:0x"); Serial.print(q.fcs, HEX);
-        if (simularErro) Serial.print(" [CORROMPIDO]");
-        Serial.println(" | Tent:" + String(tentativa));
+        Serial.println(" | Tentativa:" + String(tentativa));
 
         canal.enviarQuadro(q);
         delay(50);
@@ -196,11 +222,11 @@ class StopAndWait {
           return;
         }
         Serial.println("[TIMEOUT] Sem ACK. Retransmitindo...");
+        tentativa++;
       }
     }
 
-    // Envia quadro END — enviado 3x para garantir chegada
-    // (END não precisa de ACK, usamos redundância simples)
+    // Envia frame tipo END, enviado 3 vezes para garantir chegada
     void enviarFim(const char* descricao) {
       Quadro q;
       q.flag = FLAG_INICIO;
@@ -209,32 +235,34 @@ class StopAndWait {
       q.len  = 0;
       q.fcs  = Checksum::calcular(q);
 
-      Serial.println("------------------------------------");
-      Serial.println("[TX] Enviando END (" + String(descricao) + ") 3x...");
+      Serial.println("=================================");
+      Serial.println("[TX] Enviando END (" + String(descricao) + ") 3 vezes...");
       for (int i = 0; i < 3; i++) {
         canal.enviarQuadro(q);
         delay(400);
       }
-      Serial.println("[TX] END enviado.");
+      Serial.println("[TX] END enviado");
     }
 
     void resetarSequencia() { sequencia = 0; }
 };
 
-//  Menu:
-//   Interface serial para interagir
+// ============================================================
+//  Classe: Menu
+//  Interface serial
+// ============================================================
 class Menu {
   public:
     void exibir() {
       Serial.println();
-      Serial.println("===================================");
-      Serial.println("|      TRANSMISSOR RF 433MHz MENU    |");
-      Serial.println("=================================");
-      Serial.println("|  1. Enviar mensagem de texto         |");
-      Serial.println("|  2. Enviar imagem bitmap 8x8         |");
-      Serial.println("|  3. Simular erro de transmissao      |");
-      Serial.println("|  4. Executar demonstração completa           |");
-      Serial.println("==================================");
+      Serial.println("========================================");
+      Serial.println("║      TRANSMISSOR RF 433MHz — MENU    ║");
+      Serial.println("========================================");
+      Serial.println("║  1. Enviar mensagem de texto         ║");
+      Serial.println("║  2. Enviar imagem bitmap 8x8         ║");
+      Serial.println("║  3. Simular erro de transmissao      ║");
+      Serial.println("║  4. Executar demonstração completa           ║");
+      Serial.println("====================================");
       Serial.print("Escolha uma opcao: ");
     }
 
@@ -247,7 +275,7 @@ class Menu {
     }
 
     String lerTexto() {
-      Serial.print("Digite a mensagem (max 16 chars): ");
+      Serial.print("Digite a mensagem (máximo de 16 caracteres): ");
       while (!Serial.available()) {}
       String texto = Serial.readStringUntil('\n');
       texto.trim();
@@ -258,18 +286,19 @@ class Menu {
     }
 };
 
-//  DADOS padrão
+// ============================================================
+//  DADOS PADRÃO
+// ============================================================
 const char* mensagensPadrao[] = {
-  "Ola ESP32!",
+  "Ola",
   "RF 433MHz",
   "Checksum OK",
   "Stop & Wait",
   "Forouzan",
-  "TCD 2026"
+  "AAAAAA"
 };
 const int TOTAL_MSGS = sizeof(mensagensPadrao) / sizeof(mensagensPadrao[0]);
 
-// Imagem bitmap 8x8
 // Cada string = 1 linha = 1 quadro DATA
 const char* imagemBitmap[] = {
   "00111100",
@@ -283,12 +312,12 @@ const char* imagemBitmap[] = {
 };
 const int TOTAL_LINHAS = sizeof(imagemBitmap) / sizeof(imagemBitmap[0]);
 
-//  Instâncias globais
-CanalRF canal;
+//  OBJETOS GLOBAIS
+CanalRF     canal;
 StopAndWait protocolo(canal);
-Menu menu;
+Menu        menu;
 
-// Ação 1: Texto digitado
+//  AÇÃO 1: Texto digitado pelo usuário
 void acao_enviarTexto() {
   String texto = menu.lerTexto();
   Serial.println("\n=== ENVIANDO TEXTO ===");
@@ -299,7 +328,7 @@ void acao_enviarTexto() {
   Serial.println("=== TEXTO CONCLUIDO ===");
 }
 
-//  Ação 2: Imagem bitmap 8x8
+//  AÇÃO 2: Imagem bitmap 8x8
 void acao_enviarImagem() {
   Serial.println("\n=== ENVIANDO IMAGEM BITMAP 8x8 ===");
   protocolo.resetarSequencia();
@@ -312,28 +341,28 @@ void acao_enviarImagem() {
   Serial.println("=== IMAGEM CONCLUIDA ===");
 }
 
-//  Ação 3: Simulação de erro
+//  AÇÃO 3: Simulação de erro proposital
 void acao_simularErro() {
   Serial.println("\n=== SIMULACAO DE ERRO ===");
-  Serial.println("[INFO] primeiro quadro corrompido propositalmente");
+  Serial.println("[INFO] Primeiro quadro corrompido propositalmente");
   Serial.println("[INFO] Receptor detecta FCS invalido e descarta");
   Serial.println("[INFO] Transmissor retransmite ate receber ACK");
 
   protocolo.resetarSequencia();
   protocolo.enviarCabecalho("TEXTO");
-  protocolo.enviar("Erro simulado", true);   // corrompido, TX retransmite ate receber ACK
+  protocolo.enviar("Erro simulado", true);   // corrompido, o TX retransmite ate receber ACK
   protocolo.enviar("Recuperado OK", false);  // normal
   protocolo.enviarFim("TEXTO");
   Serial.println("=== SIMULACAO CONCLUIDA ===");
 }
 
-//  Ação 4: Demonstração completa, texto com erro + imagem
+//  AÇÃO 4: Demonstração completa, texto com erro + imagem
 void acao_demoCompleta() {
   Serial.println("\n======================================");
-  Serial.println("        DEMONSTRAÇÃO COMPLETA");
+  Serial.println("        DEMONSTRAÇÃO COMPLETA INICIADA");
   Serial.println("======================================");
 
-  // Fase 1: Texto (erro proposital no SEQ:2)
+  // Fase 1: Texto (erro proposital no frame com o campo SEQ:2)
   Serial.println("\n=== FASE 1: TEXTO ===");
   protocolo.resetarSequencia();
   protocolo.enviarCabecalho("TEXTO");
@@ -363,14 +392,16 @@ void acao_demoCompleta() {
   Serial.println("======================================");
 }
 
+// ============================================================
 //  SETUP
+// ============================================================
 void setup() {
   Serial.begin(115200);
   delay(1000);
   Serial.println("========================================");
   Serial.println("  TRANSMISSOR: Stop-and-Wait ARQ");
   Serial.println("  FCS: Checksum (soma dos bytes mod 256)");
-  Serial.println("  GPIO13=TX_DADOS e GPIO27=RX_ACK");
+  Serial.println("  GPIO13 = TX_DADOS e GPIO27 = RX_ACK");
   Serial.println("========================================");
 
   if (!canal.iniciar()) {
@@ -383,7 +414,9 @@ void setup() {
   delay(3000);
 }
 
+// ============================================================
 //  LOOP
+// ============================================================
 void loop() {
   menu.exibir();
   char opcao = menu.aguardarEscolha();
@@ -394,7 +427,7 @@ void loop() {
     case '3': acao_simularErro();    break;
     case '4': acao_demoCompleta();   break;
     default:
-      Serial.println("[AVISO] Opcao invalida");
+      Serial.println("[AVISO] Opção inválida");
       break;
   }
 }

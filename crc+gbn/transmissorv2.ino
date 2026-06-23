@@ -182,6 +182,7 @@ class GoBackN {
     uint8_t  seqProximo;     // Próximo seq a enviar
     frame   janela[GBN_JANELA];   // Buffer de frames
     bool     ocupado[GBN_JANELA];  // Marca se o slot da janela está em uso
+    bool     erroJaSimulado; // Garante que o erro simulado ocorre só 1 vez
 
     // Índice do slot na janela para um dado seq
     int slot(uint8_t seq) { return seq % GBN_JANELA; }
@@ -193,13 +194,14 @@ class GoBackN {
     bool cheia() { return naoConfirmados() >= GBN_JANELA; }
 
   public:
-    GoBackN(CanalRF& c) : canal(c), seqBase(0), seqProximo(0) {
+    GoBackN(CanalRF& c) : canal(c), seqBase(0), seqProximo(0), erroJaSimulado(false) {
       memset(ocupado, false, sizeof(ocupado));
     }
 
     void resetar() {
-      seqBase    = 0;
-      seqProximo = 0;
+      seqBase         = 0;
+      seqProximo      = 0;
+      erroJaSimulado  = false;
       memset(ocupado, false, sizeof(ocupado));
     }
 
@@ -264,7 +266,7 @@ class GoBackN {
           Serial.println(F("===================================="));
           Serial.println("[GBN-TIMEOUT] Sem resposta. Retransmitindo a partir de SEQ:" +
                          String(seqBase));
-          retransmitirDe(seqBase, msgs, totalframes, simularErroNoSeq);
+          retransmitirDe(seqBase, msgs, totalframes, -1);  // Sem erro na retransmissao
 
         } else if (tipoR == TIPO_ACK) {
           // ACK cumulativo
@@ -281,7 +283,7 @@ class GoBackN {
           Serial.println(F("===================================="));
           Serial.println("[NAK] Receptor pediu retransmissao a partir de SEQ:" +
                          String(seqR));
-          retransmitirDe(seqR, msgs, totalframes, simularErroNoSeq);
+          retransmitirDe(seqR, msgs, totalframes, -1);  // Sem erro na retransmissao
         }
       }
     }
@@ -320,10 +322,12 @@ class GoBackN {
       ocupado[slot(seq)] = true;
 
       uint8_t fcsExibido = q.fcs;
-      if (simErro) {
+      bool aplicarErro = simErro && !erroJaSimulado;
+      if (aplicarErro) {
+        erroJaSimulado = true;
         q.dados[0] ^= 0xFF;   // Corrompe 1 byte do campo dados
         Serial.println(F("===================================="));
-        Serial.println(">>> [ERRO-SIM] Corrompendo SEQ:" + String(seq) + " propositalmente");
+        Serial.println(">>> [ERRO-SIM] Corrompendo SEQ:" + String(seq) + " (1 vez apenas!)");
         fcsExibido = q.fcs;
       }
 
@@ -332,7 +336,7 @@ class GoBackN {
       Serial.print(" | \"" + String(texto) + "\"");
       Serial.print(" | CRC8:0x"); Serial.print(fcsExibido, HEX);
       Serial.print(" | Janela:[" + String(seqBase) + "-" + String((int)seqBase + GBN_JANELA - 1) + "]");
-      if (simErro) Serial.print(" [CORROMPIDO]");
+      if (aplicarErro) Serial.print(" [CORROMPIDO]");
       Serial.println();
 
       canal.enviarframe(q);
@@ -514,7 +518,7 @@ void setup() {
   Serial.println(F("=========================================="));
   Serial.println(F("  TRANSMISSOR: CRC-8 + Go-Back-N ARQ "));
   Serial.println(F("  GPIO13=TX_DADOS e GPIO27=RX_ACK         "));
-  Serial.println(F("  Janela GBN = " + String(GBN_JANELA) + " frames"));
+  Serial.println("  Janela GBN = " + String(GBN_JANELA) + " frames");
   Serial.println(F("=========================================="));
 
   if (!canal.iniciar()) {
